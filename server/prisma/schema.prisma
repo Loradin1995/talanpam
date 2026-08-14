@@ -1,0 +1,291 @@
+// Mondialito Platform — Schema Prisma (ranplase Base44)
+// PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  user
+  admin
+}
+
+enum KycStatus {
+  pending
+  submitted
+  approved
+  rejected
+}
+
+enum TxType {
+  deposit
+  withdrawal
+  entry_fee
+  prize
+  refund
+  insurance
+  adjustment
+}
+
+enum TxStatus {
+  pending
+  completed
+  failed
+  cancelled
+}
+
+enum GameMode {
+  TOURNAMENT
+  HEAD_TO_HEAD
+}
+
+enum TournamentStatus {
+  upcoming
+  active
+  finished
+}
+
+enum MatchStatus {
+  waiting
+  in_progress
+  finished
+  abandoned
+}
+
+model User {
+  id                String   @id @default(uuid())
+  email             String   @unique
+  passwordHash      String
+  role              UserRole @default(user)
+  fullName          String?
+  isBanned          Boolean  @default(false)
+  emailVerifiedAt   DateTime?
+  ageConfirmed18    Boolean  @default(false) // konfimasyon 18+ nan enskripsyon
+  tosAcceptedAt     DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  wallet            Wallet?
+  kyc               KycProfile?
+  transactions      Transaction[]
+  tournamentEntries TournamentEntry[]
+  matchesAsP1       HeadToHeadMatch[] @relation("MatchPlayer1")
+  matchesAsP2       HeadToHeadMatch[] @relation("MatchPlayer2")
+  otpCodes          OtpCode[]
+  auditLogsActor    AuditLog[]
+  refreshTokens     RefreshToken[]
+  selfExclusion     SelfExclusion?
+}
+
+model OtpCode {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  code       String
+  purpose    String   // 'register' | 'reset_password'
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, purpose])
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+}
+
+model Wallet {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountId     String   @unique // ID piblik 10 chif pou depo/admin
+  balance       Decimal  @default(0) @db.Decimal(14, 2)
+  totalWon      Decimal  @default(0) @db.Decimal(14, 2)
+  totalWagered  Decimal  @default(0) @db.Decimal(14, 2)
+  gamesPlayed   Int      @default(0)
+  currency      String   @default("HTG")
+  updatedAt     DateTime @updatedAt
+}
+
+model KycProfile {
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  username       String?   @unique
+  firstName      String?
+  lastName       String?
+  birthDate      DateTime?
+  idDocumentUrl  String?
+  status         KycStatus @default(pending)
+  adminNote      String?
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model SelfExclusion {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  until     DateTime // dat jwè a re-otorize jwe
+  reason    String?
+  createdAt DateTime @default(now())
+}
+
+model Transaction {
+  id            String    @id @default(uuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id])
+  type          TxType
+  amount        Decimal   @db.Decimal(14, 2) // + kredi, - debi
+  balanceAfter  Decimal   @db.Decimal(14, 2)
+  status        TxStatus  @default(pending)
+  referenceType String?   // 'tournament' | 'match' | 'manual'
+  referenceId   String?
+  note          String?
+  createdByAdminId String?
+  createdAt     DateTime  @default(now())
+
+  @@index([userId, type])
+  @@index([type, status])
+}
+
+model Game {
+  id          String   @id @default(uuid())
+  slug        String   @unique // 'penalty', etc.
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  modes       String[] // ['TOURNAMENT','HEAD_TO_HEAD']
+  config      Json?    // konfig espesifik jwèt la (limit skò, elatriye)
+  createdAt   DateTime @default(now())
+
+  tournaments Tournament[]
+  rooms       HeadToHeadRoom[]
+}
+
+model Tournament {
+  id                String           @id @default(uuid())
+  gameId            String
+  game              Game             @relation(fields: [gameId], references: [id])
+  title             String
+  description       String?
+  entryFee          Decimal          @db.Decimal(14, 2)
+  costPerAttempt    Decimal          @db.Decimal(14, 2)
+  jackpotSharePct   Decimal          @db.Decimal(5, 2) @default(0)
+  initialJackpot    Decimal          @db.Decimal(14, 2) @default(0)
+  jackpotAmount     Decimal          @db.Decimal(14, 2) @default(0)
+  maxAttempts       Int              @default(5)
+  attemptsPerFee    Int              @default(1)
+  topWinners        Int              @default(1)
+  prizeDistribution Int[]            @default([100])
+  status            TournamentStatus @default(upcoming)
+  startDate         DateTime?
+  endDate           DateTime?
+  winnerUserId      String?
+  bannerImage       String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  entries           TournamentEntry[]
+}
+
+model TournamentEntry {
+  id            String   @id @default(uuid())
+  tournamentId  String
+  tournament    Tournament @relation(fields: [tournamentId], references: [id])
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  bestScore     Int      @default(0)
+  attemptsUsed  Int      @default(0)
+  totalSpent    Decimal  @db.Decimal(14, 2) @default(0)
+  entryPaid     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  attempts      TournamentAttempt[]
+
+  @@unique([tournamentId, userId])
+}
+
+model TournamentAttempt {
+  id        String   @id @default(uuid())
+  entryId   String
+  entry     TournamentEntry @relation(fields: [entryId], references: [id])
+  score     Int
+  rawResult Json?    // detay/replay soumèt pa kliyan pou odit
+  createdAt DateTime @default(now())
+}
+
+model HeadToHeadRoom {
+  id         String   @id @default(uuid())
+  gameId     String
+  game       Game     @relation(fields: [gameId], references: [id])
+  name       String
+  description String?
+  entryCost  Decimal  @db.Decimal(14, 2)
+  prize      Decimal  @db.Decimal(14, 2)
+  isActive   Boolean  @default(true)
+  color      String?
+  createdAt  DateTime @default(now())
+
+  matches    HeadToHeadMatch[]
+}
+
+model HeadToHeadMatch {
+  id           String       @id @default(uuid())
+  gameId       String
+  roomId       String
+  room         HeadToHeadRoom @relation(fields: [roomId], references: [id])
+  player1Id    String
+  player1      User         @relation("MatchPlayer1", fields: [player1Id], references: [id])
+  player2Id    String?
+  player2      User?        @relation("MatchPlayer2", fields: [player2Id], references: [id])
+  status       MatchStatus  @default(waiting)
+  state        Json         @default("{}") // eta jwèt espesifik (zòn tire/pare, elatriye) — jere pa plugin jwèt la
+  player1Score Int          @default(0)
+  player2Score Int          @default(0)
+  winnerId     String?
+  entryCost    Decimal      @db.Decimal(14, 2)
+  prize        Decimal      @db.Decimal(14, 2)
+  settledAt    DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([roomId, status])
+  @@index([player1Id])
+  @@index([player2Id])
+}
+
+model AppSetting {
+  key      String  @id
+  value    String
+  label    String?
+  category String?
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  actorUserId  String?
+  actor        User?    @relation(fields: [actorUserId], references: [id])
+  action       String   // 'wallet.credit', 'kyc.approve', 'withdrawal.reject', ...
+  targetType   String?
+  targetId     String?
+  meta         Json?
+  createdAt    DateTime @default(now())
+
+  @@index([action])
+  @@index([targetType, targetId])
+}

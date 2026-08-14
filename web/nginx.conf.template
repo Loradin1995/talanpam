@@ -1,0 +1,41 @@
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Fichye estatik SPA — kach long paske Vite mete yon hash nan non fichye yo.
+    location /assets/ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    location /mondialito-assets/ {
+        expires 7d;
+        add_header Cache-Control "public";
+    }
+
+    # Redireksyone tout apèl /api/* bay backend Node/Express la.
+    # Backend la monte wout li yo san prefiks /api (egzanp: /auth, /wallet),
+    # se poutèt sa nou retire prefiks la anvan nou pase demand lan.
+    #
+    # BACKEND_INTERNAL_HOST ranplase pa envsubst OTMATIKMAN pa docker-entrypoint
+    # ofisyèl nginx la (imaj nginx:alpine sibstitiye tout fichye .template ki
+    # nan /etc/nginx/templates/ anvan sèvè a demare). Sa pèmèt menm imaj la
+    # sèvi ni ak Docker Compose (server:4000), ni ak Railway
+    # (server.railway.internal:4000) san rebati imaj la.
+    location /api/ {
+        proxy_pass http://${BACKEND_INTERNAL_HOST}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 10m;
+    }
+
+    # SPA fallback — tout lòt wout retounen index.html, React Router jere navigasyon an.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
